@@ -1,0 +1,27 @@
+@import url("https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.css");
+@import url("https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400..900;1,400..900&display=swap");
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Pretendard", ui-sans-serif, system-ui, sans-serif;
+  --font-serif: "Playfair Display", ui-serif, Georgia, serif;
+  
+  --color-natural-bg: #F8F7F4;
+  --color-natural-text: #2D2D2D;
+  --color-natural-border: #E5E2D9;
+  --color-natural-accent: #C5A059;
+  --color-natural-muted: #A19D94;
+  --color-natural-dark: #1A1A1A;
+  --color-natural-details: #7D786D;
+}
+
+@layer base {
+  body {
+    @apply font-sans bg-natural-bg text-natural-text antialiased;
+  }
+  
+  h1, h2, h3, h4, .font-serif {
+    @apply font-serif;
+  }
+}
+
