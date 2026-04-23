@@ -22,11 +22,20 @@ async function startServer() {
     app.use(vite.middlewares);
   } else {
     // Serve static files in production
-    const distPath = path.join(process.cwd(), 'dist');
+    const distPath = path.resolve(__dirname, 'dist');
+    console.log(`Serving static files from: ${distPath}`);
+    
     app.use(express.static(distPath));
     
     // SPA Fallback: Send index.html for all non-static paths
     app.get('*', (req, res) => {
+      // If the request is for a file (has an extension) but reached here, it's a 404
+      if (req.path.includes('.') && !req.path.endsWith('.html')) {
+        console.warn(`File not found: ${req.path}`);
+        return res.status(404).send('Not found');
+      }
+      
+      console.log(`Serving index.html for path: ${req.path}`);
       res.sendFile(path.join(distPath, 'index.html'));
     });
   }
