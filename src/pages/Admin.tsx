@@ -3,12 +3,13 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { motion } from 'motion/react';
 import Navbar from '../components/Navbar';
-import { Lock, Plus, LogOut, Trash2, Upload, X, Edit3 } from 'lucide-react';
+import { Lock, Plus, LogOut, Trash2, Upload, X, Edit3, ChevronUp, ChevronDown } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { Project } from '../types';
+import { storage } from '../lib/storage';
 
 const INITIAL_PROJECTS: Project[] = [
   {
@@ -58,10 +59,8 @@ export default function Admin() {
   const [error, setError] = useState('');
   
   // Data State
-  const [projects, setProjects] = useState<Project[]>(() => {
-    const saved = localStorage.getItem('dwg_projects');
-    return saved ? JSON.parse(saved) : INITIAL_PROJECTS;
-  });
+  const [projects, setProjects] = useState<Project[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
 
   // Form State
   const [form, setForm] = useState<Partial<Project>>({
@@ -79,15 +78,58 @@ export default function Admin() {
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const galleryInputRef = useRef<HTMLInputElement>(null);
+  const fileReaderRef = useRef<HTMLInputElement>(null);
 
+  // Load projects asynchronously on mount (includes migration from localStorage)
   useEffect(() => {
-    try {
-      localStorage.setItem('dwg_projects', JSON.stringify(projects));
-    } catch (e) {
-      console.error('Storage full:', e);
-      setError('저장 공간이 부족합니다. 사진 크기를 줄이거나 일부 프로젝트를 삭제해 주세요.');
-    }
-  }, [projects]);
+    const loadData = async () => {
+      setIsLoading(true);
+      try {
+        let saved = await storage.get<Project[]>('dwg_projects');
+        if (!saved) {
+          const legacy = localStorage.getItem('dwg_projects');
+          if (legacy) {
+            try {
+              saved = JSON.parse(legacy);
+              // Migrate to IndexedDB
+              await storage.set('dwg_projects', saved);
+              // Safely remove legacy key to clean space
+              localStorage.removeItem('dwg_projects');
+            } catch (err) {
+              console.error('Failed to parse legacy projects:', err);
+            }
+          }
+        }
+        if (saved && saved.length > 0) {
+          setProjects(saved);
+        } else {
+          setProjects(INITIAL_PROJECTS);
+          await storage.set('dwg_projects', INITIAL_PROJECTS);
+        }
+      } catch (err) {
+        console.error('Failed to load portfolio database:', err);
+        setProjects(INITIAL_PROJECTS);
+      } finally {
+        setIsLoading(false);
+      }
+    };
+
+    loadData();
+  }, []);
+
+  // Sync projects with IndexedDB on state changes
+  useEffect(() => {
+    const saveData = async () => {
+      if (isLoading) return;
+      try {
+        await storage.set('dwg_projects', projects);
+      } catch (e) {
+        console.error('Storage full or error:', e);
+        setError('데이터베이스 저장 중 오류가 발생했습니다.');
+      }
+    };
+    saveData();
+  }, [projects, isLoading]);
 
   // Image compression helper
   const compressImage = (file: File): Promise<string> => {
@@ -154,7 +196,7 @@ export default function Admin() {
   };
 
   const handleGalleryFilesChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const files = Array.from(e.target.files || []);
+    const files: File[] = Array.from(e.target.files || []) as File[];
     if (files.length === 0) return;
     
     setIsUploading(true);
@@ -239,6 +281,17 @@ export default function Admin() {
     setDeleteConfirmId(null);
   };
 
+  const moveProject = (index: number, direction: 'up' | 'down') => {
+    if (direction === 'up' && index === 0) return;
+    if (direction === 'down' && index === projects.length - 1) return;
+
+    const targetIndex = direction === 'up' ? index - 1 : index + 1;
+    const reordered = [...projects];
+    const [moved] = reordered.splice(index, 1);
+    reordered.splice(targetIndex, 0, moved);
+    setProjects(reordered);
+  };
+
   const handleEdit = (project: Project) => {
     setForm({
       title: project.title,
@@ -253,6 +306,63 @@ export default function Admin() {
     setGalleryPreviewUrls(project.images || []);
     setError('');
     window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
+  const exportProjects = () => {
+    try {
+      const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(projects, null, 2));
+      const downloadAnchor = document.createElement('a');
+      downloadAnchor.setAttribute("href", dataStr);
+      downloadAnchor.setAttribute("download", `dwg_portfolio_backup_${new Date().toISOString().split('T')[0]}.json`);
+      document.body.appendChild(downloadAnchor);
+      downloadAnchor.click();
+      downloadAnchor.remove();
+    } catch (err) {
+      setError('데이터 추출 중 오류가 발생했습니다.');
+    }
+  };
+
+  const importProjects = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = async (event) => {
+      try {
+        const imported = JSON.parse(event.target?.result as string);
+        if (Array.isArray(imported)) {
+          const isValid = imported.every(p => p.id && p.title && p.category);
+          if (isValid) {
+            if (window.confirm(`총 ${imported.length}개의 프로젝트를 불러오시겠습니까? 기존 저장된 항목들과 합쳐지거나 교체됩니다.`)) {
+              const overwrite = window.confirm("확인을 누르면 [기존 데이터 전체 교체], 취소를 누르면 [기존 데이터 뒤에 추가] 합니다.");
+              if (overwrite) {
+                setProjects(imported);
+              } else {
+                setProjects(prev => {
+                  const merged = [...prev];
+                  imported.forEach(imp => {
+                    if (!merged.some(m => m.id === imp.id)) {
+                      merged.push(imp);
+                    }
+                  });
+                  return merged;
+                });
+              }
+              setError('');
+            }
+          } else {
+            setError('올바르지 않은 백업 파일 형식입니다. (필수 필드 누락)');
+          }
+        } else {
+          setError('올바르지 않은 백업 파일 형식입니다. (배열 형태가 아님)');
+        }
+      } catch (err) {
+        setError('백업 파일을 읽는 도중 오류가 발생했습니다.');
+      } finally {
+        if (fileReaderRef.current) fileReaderRef.current.value = '';
+      }
+    };
+    reader.readAsText(file);
   };
 
   if (!isAuthorized) {
@@ -302,12 +412,38 @@ export default function Admin() {
               <p className="text-natural-accent text-[11px] uppercase tracking-[0.3em] font-bold mb-2">Management System</p>
               <h1 className="text-3xl font-serif italic text-natural-dark">포트폴리오 관리판</h1>
             </div>
-            <button 
-              onClick={() => setIsAuthorized(false)} 
-              className="flex items-center gap-2 bg-natural-bg border border-natural-border px-8 py-3 text-[10px] uppercase tracking-widest font-bold hover:bg-white transition-colors"
-            >
-              <LogOut className="w-3.5 h-3.5" /> 로그아웃
-            </button>
+            <div className="flex flex-wrap items-center gap-3">
+              <button 
+                type="button"
+                onClick={exportProjects} 
+                className="flex items-center gap-1.5 bg-natural-bg border border-natural-border px-5 py-3 text-[10px] uppercase tracking-widest font-bold hover:bg-white transition-colors text-natural-dark"
+                title="포트폴리오 전체 데이터를 PC에 다운로드하여 백업합니다."
+              >
+                📥 백업 다운로드
+              </button>
+              <button 
+                type="button"
+                onClick={() => fileReaderRef.current?.click()} 
+                className="flex items-center gap-1.5 bg-natural-bg border border-natural-border px-5 py-3 text-[10px] uppercase tracking-widest font-bold hover:bg-white transition-colors text-natural-dark"
+                title="이전 백업 파일을 불러와 전체 교체하거나 누적 추가합니다."
+              >
+                📤 백업 파일 복구
+              </button>
+              <input 
+                type="file" 
+                ref={fileReaderRef} 
+                onChange={importProjects} 
+                accept=".json" 
+                className="hidden" 
+              />
+              <button 
+                type="button"
+                onClick={() => setIsAuthorized(false)} 
+                className="flex items-center gap-1.5 bg-natural-dark text-white border border-natural-dark px-5 py-3 text-[10px] uppercase tracking-widest font-bold hover:bg-natural-accent hover:border-natural-accent transition-colors"
+              >
+                <LogOut className="w-3.5 h-3.5 text-natural-accent" /> 로그아웃
+              </button>
+            </div>
           </div>
 
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-16">
@@ -482,11 +618,50 @@ export default function Admin() {
             </div>
 
             <div className="lg:col-span-2 space-y-4">
-              <h2 className="text-sm uppercase tracking-widest font-bold mb-8 text-natural-dark">등록된 프로젝트 목록 ({projects.length})</h2>
+              <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-8 gap-4 pb-4 border-b border-natural-border/30">
+                <h2 className="text-sm uppercase tracking-widest font-bold text-natural-dark">등록된 프로젝트 목록 ({projects.length})</h2>
+                <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-wider font-bold text-natural-accent">
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
+                  IndexedDB 고용량 데이터베이스 활성화됨 (용량 무제한)
+                </div>
+              </div>
               <div className="space-y-4">
-                {projects.map((project) => (
+                {projects.map((project, index) => (
                   <div key={project.id} className="bg-white p-6 border border-natural-border flex items-center justify-between group hover:border-natural-accent transition-colors text-natural-dark">
-                    <div className="flex items-center gap-6">
+                    <div className="flex items-center gap-4 md:gap-6">
+                      {/* Reorder Controls */}
+                      <div className="flex flex-col items-center justify-center border-r border-natural-border/60 pr-4 mr-1 gap-0.5">
+                        <button
+                          type="button"
+                          onClick={() => moveProject(index, 'up')}
+                          disabled={index === 0}
+                          className={`p-1 transition-colors ${
+                            index === 0
+                              ? 'text-natural-border/40 cursor-not-allowed'
+                              : 'text-natural-muted hover:text-natural-accent'
+                          }`}
+                          title="위로 이동"
+                        >
+                          <ChevronUp className="w-4 h-4" />
+                        </button>
+                        <span className="text-[10px] font-mono text-natural-details font-bold select-none leading-none my-0.5">
+                          {String(index + 1).padStart(2, '0')}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => moveProject(index, 'down')}
+                          disabled={index === projects.length - 1}
+                          className={`p-1 transition-colors ${
+                            index === projects.length - 1
+                              ? 'text-natural-border/40 cursor-not-allowed'
+                              : 'text-natural-muted hover:text-natural-accent'
+                          }`}
+                          title="아래로 이동"
+                        >
+                          <ChevronDown className="w-4 h-4" />
+                        </button>
+                      </div>
+
                       <div className="w-16 h-16 bg-natural-bg overflow-hidden flex-shrink-0">
                         <img src={project.thumbnail} className="w-full h-full object-cover opacity-80 group-hover:opacity-100 transition-opacity" />
                       </div>

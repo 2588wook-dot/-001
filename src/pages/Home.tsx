@@ -8,6 +8,7 @@ import { Project } from '../types';
 import Navbar from '../components/Navbar';
 import { Link } from 'react-router-dom';
 import { useState, useEffect } from 'react';
+import { storage } from '../lib/storage';
 
 const INITIAL_PROJECTS: Project[] = [
   {
@@ -56,13 +57,33 @@ export default function Home() {
   const [filter, setFilter] = useState<'all' | 'interior' | 'construction' | 'remodeling'>('all');
 
   useEffect(() => {
-    const saved = localStorage.getItem('dwg_projects');
-    if (saved) {
-      setProjects(JSON.parse(saved));
-    } else {
-      setProjects(INITIAL_PROJECTS);
-      localStorage.setItem('dwg_projects', JSON.stringify(INITIAL_PROJECTS));
-    }
+    const loadProjects = async () => {
+      try {
+        let saved = await storage.get<Project[]>('dwg_projects');
+        if (!saved) {
+          const legacy = localStorage.getItem('dwg_projects');
+          if (legacy) {
+            try {
+              saved = JSON.parse(legacy);
+              await storage.set('dwg_projects', saved);
+            } catch (err) {
+              console.error('Error during Home.tsx legacy transition:', err);
+            }
+          }
+        }
+        if (saved && saved.length > 0) {
+          setProjects(saved);
+        } else {
+          setProjects(INITIAL_PROJECTS);
+          await storage.set('dwg_projects', INITIAL_PROJECTS);
+        }
+      } catch (err) {
+        console.error('Error loading projects in Home:', err);
+        setProjects(INITIAL_PROJECTS);
+      }
+    };
+
+    loadProjects();
   }, []);
 
   const filteredProjects = projects.filter(p => filter === 'all' || p.category === filter);

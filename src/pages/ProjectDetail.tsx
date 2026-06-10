@@ -9,18 +9,36 @@ import Navbar from '../components/Navbar';
 import { ArrowLeft } from 'lucide-react';
 import { useState, useEffect } from 'react';
 import { Project } from '../types';
+import { storage } from '../lib/storage';
 
 export default function ProjectDetail() {
   const { id } = useParams();
   const [project, setProject] = useState<Project | null>(null);
 
   useEffect(() => {
-    const saved = localStorage.getItem('dwg_projects');
-    if (saved) {
-      const projects: Project[] = JSON.parse(saved);
-      const found = projects.find(p => p.id === id);
-      if (found) setProject(found);
-    }
+    const loadProject = async () => {
+      try {
+        let saved = await storage.get<Project[]>('dwg_projects');
+        if (!saved) {
+          const legacy = localStorage.getItem('dwg_projects');
+          if (legacy) {
+            try {
+              saved = JSON.parse(legacy);
+            } catch (err) {
+              console.error('Error during ProjectDetail.tsx legacy transition:', err);
+            }
+          }
+        }
+        if (saved) {
+          const found = saved.find(p => p.id === id);
+          if (found) setProject(found);
+        }
+      } catch (err) {
+        console.error('Error loading project draft:', err);
+      }
+    };
+
+    loadProject();
   }, [id]);
 
   if (!project) {
