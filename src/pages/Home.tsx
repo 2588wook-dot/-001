@@ -9,48 +9,7 @@ import Navbar from '../components/Navbar';
 import { Link } from 'react-router-dom';
 import { useState, useEffect } from 'react';
 import { storage } from '../lib/storage';
-
-const INITIAL_PROJECTS: Project[] = [
-  {
-    id: '1',
-    title: 'Gyeongju Cafe "M"',
-    category: 'remodeling',
-    location: 'Gyeongju',
-    area: '148㎡',
-    period: '2024',
-    description: 'A project that combines the beauty of traditional Hanok with modern convenience.',
-    thumbnail: 'https://images.unsplash.com/photo-1590059510108-04f7f6f70a91?q=80&w=2000&auto=format&fit=crop',
-    images: [],
-    createdAt: new Date(),
-    featured: true
-  },
-  {
-    id: '2',
-    title: 'Seongsu Residence',
-    category: 'interior',
-    location: 'Seongsu, Seoul',
-    area: '92㎡',
-    period: '2023',
-    description: 'A sophisticated office space using white tones and exposed concrete.',
-    thumbnail: 'https://images.unsplash.com/photo-1497366216548-37526070297c?q=80&w=2000&auto=format&fit=crop',
-    images: [],
-    createdAt: new Date(),
-    featured: true
-  },
-  {
-    id: '3',
-    title: 'Pyeongchang Villa',
-    category: 'construction',
-    location: 'Haeundae, Busan',
-    area: '205㎡',
-    period: '2023',
-    description: 'A modern private house project that maximizes the ocean view.',
-    thumbnail: 'https://images.unsplash.com/photo-1600585154340-be6161a56a0c?q=80&w=2000&auto=format&fit=crop',
-    images: [],
-    createdAt: new Date(),
-    featured: true
-  }
-];
+import { INITIAL_PROJECTS } from '../data/initialProjects';
 
 export default function Home() {
   const [projects, setProjects] = useState<Project[]>([]);
@@ -59,24 +18,90 @@ export default function Home() {
   useEffect(() => {
     const loadProjects = async () => {
       try {
-        let saved = await storage.get<Project[]>('dwg_projects');
-        if (!saved) {
+        // 1. Get local cached data
+        let localProjects = await storage.get<Project[]>('dwg_projects');
+        if (!localProjects) {
           const legacy = localStorage.getItem('dwg_projects');
           if (legacy) {
             try {
-              saved = JSON.parse(legacy);
-              await storage.set('dwg_projects', saved);
+              localProjects = JSON.parse(legacy);
             } catch (err) {
-              console.error('Error during Home.tsx legacy transition:', err);
+              console.error('Failed to parse legacy in Home.tsx:', err);
             }
           }
         }
-        if (saved && saved.length > 0) {
-          setProjects(saved);
-        } else {
-          setProjects(INITIAL_PROJECTS);
-          await storage.set('dwg_projects', INITIAL_PROJECTS);
+
+        // 2. Load from express cloud server
+        let serverProjects: Project[] | null = null;
+        try {
+          const response = await fetch('/api/projects');
+          if (response.ok) {
+            serverProjects = await response.json();
+          }
+        } catch (apiErr) {
+          console.warn('Unable to query backend Cloud server, falling back to local client database', apiErr);
         }
+
+        // 3. Smart Conflict Resolution
+        let finalProjects: Project[] = [];
+
+        const isDefaultSeedList = (list: Project[] | null): boolean => {
+          if (!list) return true;
+          if (list.length <= 3) return true;
+          return false;
+        };
+
+        if (localProjects && localProjects.length > 0) {
+          if (serverProjects && serverProjects.length > 0) {
+            const serverIsDefault = isDefaultSeedList(serverProjects);
+            const localIsDefault = isDefaultSeedList(localProjects);
+
+            if (serverIsDefault && !localIsDefault) {
+              // Server is default but local has customized work. Keep local and sync to server.
+              console.log('[Home Sync] Local cache holds custom items while cloud server returned defaults. Using local database.');
+              finalProjects = localProjects;
+              try {
+                await fetch('/api/projects', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify(localProjects)
+                });
+              } catch (postErr) {
+                console.error('[Home Sync] Server registration issue:', postErr);
+              }
+            } else if (!serverIsDefault && localIsDefault) {
+              finalProjects = serverProjects;
+            } else {
+              // Both present - select larger or default to server
+              if (serverProjects.length >= localProjects.length) {
+                finalProjects = serverProjects;
+              } else {
+                finalProjects = localProjects;
+                try {
+                  await fetch('/api/projects', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(localProjects)
+                  });
+                } catch (postErr) {
+                  console.error('[Home Sync] Synchronizer upload error:', postErr);
+                }
+              }
+            }
+          } else {
+            finalProjects = localProjects;
+          }
+        } else {
+          finalProjects = (serverProjects && serverProjects.length > 0) ? serverProjects : INITIAL_PROJECTS;
+        }
+
+        // Clean legacy
+        if (localStorage.getItem('dwg_projects')) {
+          localStorage.removeItem('dwg_projects');
+        }
+
+        setProjects(finalProjects);
+        await storage.set('dwg_projects', finalProjects);
       } catch (err) {
         console.error('Error loading projects in Home:', err);
         setProjects(INITIAL_PROJECTS);
