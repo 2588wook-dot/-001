@@ -1,0 +1,46 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // Global Safety Net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Helper functions
+    function isValidId(id) { 
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$'); 
+    }
+    
+    function incoming() { 
+      return request.resource.data; 
+    }
+    
+    function existing() { 
+      return resource.data; 
+    }
+
+    function isValidProject(p) {
+      return p.keys().hasAll(['id', 'title', 'category', 'location', 'area', 'period', 'description', 'thumbnail', 'images', 'createdAt', 'featured']) &&
+             p.keys().size() == 11 &&
+             p.id is string && p.id.size() <= 128 &&
+             p.title is string && p.title.size() <= 200 &&
+             p.category is string && (p.category == 'interior' || p.category == 'construction' || p.category == 'remodeling') &&
+             p.location is string && p.location.size() <= 200 &&
+             p.area is string && p.area.size() <= 100 &&
+             p.period is string && p.period.size() <= 50 &&
+             p.description is string && p.description.size() <= 4000 &&
+             p.thumbnail is string && p.thumbnail.size() <= 2000000 &&
+             p.images is list && p.images.size() <= 40 &&
+             p.createdAt != null &&
+             p.featured is bool;
+    }
+
+    match /projects/{projectId} {
+      allow read: if true;
+      allow create: if isValidId(projectId) && isValidProject(incoming()) && incoming().id == projectId;
+      allow update: if isValidId(projectId) && isValidProject(incoming()) && incoming().id == projectId;
+      allow delete: if isValidId(projectId);
+    }
+  }
+}

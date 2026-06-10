@@ -1,0 +1,55 @@
+{
+  "entities": {
+    "Project": {
+      "title": "Project",
+      "description": "An architectural/interior portfolio project.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "category": {
+          "type": "string",
+          "enum": ["interior", "construction", "remodeling"]
+        },
+        "location": {
+          "type": "string"
+        },
+        "area": {
+          "type": "string"
+        },
+        "period": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "thumbnail": {
+          "type": "string"
+        },
+        "images": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "createdAt": {
+          "type": "string"
+        },
+        "featured": {
+          "type": "boolean"
+        }
+      },
+      "required": ["id", "title", "category", "location", "area", "period", "description", "thumbnail", "images", "createdAt", "featured"]
+    }
+  },
+  "firestore": {
+    "projects": {
+      "schema": "Project",
+      "description": "Collection of architectural portfolio projects"
+    }
+  }
+}

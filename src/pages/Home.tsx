@@ -10,6 +10,7 @@ import { Link } from 'react-router-dom';
 import { useState, useEffect } from 'react';
 import { storage } from '../lib/storage';
 import { INITIAL_PROJECTS } from '../data/initialProjects';
+import { getProjectsFromFirestore } from '../lib/projectService';
 
 export default function Home() {
   const [projects, setProjects] = useState<Project[]>([]);
@@ -18,93 +19,30 @@ export default function Home() {
   useEffect(() => {
     const loadProjects = async () => {
       try {
-        // 1. Get local cached data
-        let localProjects = await storage.get<Project[]>('dwg_projects');
-        if (!localProjects) {
-          const legacy = localStorage.getItem('dwg_projects');
-          if (legacy) {
-            try {
-              localProjects = JSON.parse(legacy);
-            } catch (err) {
-              console.error('Failed to parse legacy in Home.tsx:', err);
-            }
-          }
+        // Try getting local cached data first to render immediately
+        const cached = await storage.get<Project[]>('dwg_projects');
+        if (cached && cached.length > 0) {
+          setProjects(cached);
         }
 
-        // 2. Load from express cloud server
-        let serverProjects: Project[] | null = null;
-        try {
-          const response = await fetch('/api/projects');
-          if (response.ok) {
-            serverProjects = await response.json();
-          }
-        } catch (apiErr) {
-          console.warn('Unable to query backend Cloud server, falling back to local client database', apiErr);
+        // Fetch from Firestore
+        const serverProjects = await getProjectsFromFirestore();
+        if (serverProjects && serverProjects.length > 0) {
+          setProjects(serverProjects);
+          await storage.set('dwg_projects', serverProjects);
+        } else if (!cached || cached.length === 0) {
+          setProjects(INITIAL_PROJECTS);
+          await storage.set('dwg_projects', INITIAL_PROJECTS);
         }
-
-        // 3. Smart Conflict Resolution
-        let finalProjects: Project[] = [];
-
-        const isDefaultSeedList = (list: Project[] | null): boolean => {
-          if (!list) return true;
-          if (list.length <= 3) return true;
-          return false;
-        };
-
-        if (localProjects && localProjects.length > 0) {
-          if (serverProjects && serverProjects.length > 0) {
-            const serverIsDefault = isDefaultSeedList(serverProjects);
-            const localIsDefault = isDefaultSeedList(localProjects);
-
-            if (serverIsDefault && !localIsDefault) {
-              // Server is default but local has customized work. Keep local and sync to server.
-              console.log('[Home Sync] Local cache holds custom items while cloud server returned defaults. Using local database.');
-              finalProjects = localProjects;
-              try {
-                await fetch('/api/projects', {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify(localProjects)
-                });
-              } catch (postErr) {
-                console.error('[Home Sync] Server registration issue:', postErr);
-              }
-            } else if (!serverIsDefault && localIsDefault) {
-              finalProjects = serverProjects;
-            } else {
-              // Both present - select larger or default to server
-              if (serverProjects.length >= localProjects.length) {
-                finalProjects = serverProjects;
-              } else {
-                finalProjects = localProjects;
-                try {
-                  await fetch('/api/projects', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(localProjects)
-                  });
-                } catch (postErr) {
-                  console.error('[Home Sync] Synchronizer upload error:', postErr);
-                }
-              }
-            }
-          } else {
-            finalProjects = localProjects;
-          }
-        } else {
-          finalProjects = (serverProjects && serverProjects.length > 0) ? serverProjects : INITIAL_PROJECTS;
-        }
-
-        // Clean legacy
-        if (localStorage.getItem('dwg_projects')) {
-          localStorage.removeItem('dwg_projects');
-        }
-
-        setProjects(finalProjects);
-        await storage.set('dwg_projects', finalProjects);
       } catch (err) {
         console.error('Error loading projects in Home:', err);
-        setProjects(INITIAL_PROJECTS);
+        // Fallback to cache or initial seed
+        const cached = await storage.get<Project[]>('dwg_projects');
+        if (cached && cached.length > 0) {
+          setProjects(cached);
+        } else {
+          setProjects(INITIAL_PROJECTS);
+        }
       }
     };
 

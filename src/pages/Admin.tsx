@@ -11,6 +11,7 @@ import { Link } from 'react-router-dom';
 import { Project } from '../types';
 import { storage } from '../lib/storage';
 import { INITIAL_PROJECTS } from '../data/initialProjects';
+import { getProjectsFromFirestore, saveProjectsToFirestore } from '../lib/projectService';
 
 export default function Admin() {
   const [password, setPassword] = useState('');
@@ -39,105 +40,34 @@ export default function Admin() {
   const galleryInputRef = useRef<HTMLInputElement>(null);
   const fileReaderRef = useRef<HTMLInputElement>(null);
 
-  // Load projects asynchronously on mount (includes migration from localStorage and server API fetch, with conflict resolution)
+  // Load projects from Firestore (with local cache fallback) on mount
   useEffect(() => {
     const loadData = async () => {
       setIsLoading(true);
       try {
-        // 1. Load from local stores first
-        let localProjects = await storage.get<Project[]>('dwg_projects');
-        if (!localProjects) {
-          const legacy = localStorage.getItem('dwg_projects');
-          if (legacy) {
-            try {
-              localProjects = JSON.parse(legacy);
-            } catch (err) {
-              console.error('Failed to parse legacy projects:', err);
-            }
-          }
+        // Try getting local cached projects first
+        const cached = await storage.get<Project[]>('dwg_projects');
+        if (cached && cached.length > 0) {
+          setProjects(cached);
         }
 
-        // 2. Fetch from Express Cloud Server
-        let serverProjects: Project[] | null = null;
-        try {
-          const response = await fetch('/api/projects');
-          if (response.ok) {
-            serverProjects = await response.json();
-          }
-        } catch (apiErr) {
-          console.warn('Unable to query backend Cloud server, falling back to local client database', apiErr);
+        // Fetch newest from Firestore
+        const serverProjects = await getProjectsFromFirestore();
+        if (serverProjects && serverProjects.length > 0) {
+          setProjects(serverProjects);
+          await storage.set('dwg_projects', serverProjects);
+        } else if (!cached || cached.length === 0) {
+          setProjects(INITIAL_PROJECTS);
+          await storage.set('dwg_projects', INITIAL_PROJECTS);
         }
-
-        // 3. Smart Conflict Resolution
-        let finalProjects: Project[] = [];
-
-        // Helper to detect if a list is exactly the basic default seed list
-        const isDefaultSeedList = (list: Project[] | null): boolean => {
-          if (!list) return true;
-          if (list.length <= 3) return true;
-          return false;
-        };
-
-        if (localProjects && localProjects.length > 0) {
-          if (serverProjects && serverProjects.length > 0) {
-            const serverIsDefault = isDefaultSeedList(serverProjects);
-            const localIsDefault = isDefaultSeedList(localProjects);
-
-            if (serverIsDefault && !localIsDefault) {
-              // Server has default templates but user has custom projects locally. Save local to server!
-              console.log('[Sync] Local database contains custom items whereas server is in seed state. Restoring/Pushing local database to cloud server.');
-              finalProjects = localProjects;
-              try {
-                await fetch('/api/projects', {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify(localProjects)
-                });
-              } catch (postErr) {
-                console.error('[Sync] Failed to push local data during startup sync:', postErr);
-              }
-            } else if (!serverIsDefault && localIsDefault) {
-              // Server has custom projects but client has defaults. Pull server!
-              console.log('[Sync] Server contains custom database while client is blank/default. Downloading cloud database.');
-              finalProjects = serverProjects;
-            } else {
-              // Both are custom or both are default. Choose the one with larger count, or default to server as source of truth
-              if (serverProjects.length >= localProjects.length) {
-                finalProjects = serverProjects;
-              } else {
-                console.log('[Sync] Local database has more items than server database. Syncing local to server.');
-                finalProjects = localProjects;
-                try {
-                  await fetch('/api/projects', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(localProjects)
-                  });
-                } catch (postErr) {
-                  console.error('[Sync] Failed to sync local data:', postErr);
-                }
-              }
-            }
-          } else {
-            // Server returned empty or broke, use local
-            finalProjects = localProjects;
-          }
-        } else {
-          // No local data, pull server or use fallback
-          finalProjects = (serverProjects && serverProjects.length > 0) ? serverProjects : INITIAL_PROJECTS;
-        }
-
-        // Clean legacy localStorage if it exists
-        if (localStorage.getItem('dwg_projects')) {
-          localStorage.removeItem('dwg_projects');
-        }
-
-        // 4. Set state and write back to local cache
-        setProjects(finalProjects);
-        await storage.set('dwg_projects', finalProjects);
       } catch (err) {
         console.error('Failed to load portfolio database:', err);
-        setProjects(INITIAL_PROJECTS);
+        const cached = await storage.get<Project[]>('dwg_projects');
+        if (cached && cached.length > 0) {
+          setProjects(cached);
+        } else {
+          setProjects(INITIAL_PROJECTS);
+        }
       } finally {
         setIsLoading(false);
       }
@@ -146,25 +76,19 @@ export default function Admin() {
     loadData();
   }, []);
 
-  // Sync projects with server and local IndexedDB on state changes
+  // Sync projects with Firestore and local storage on state changes
   useEffect(() => {
     const saveData = async () => {
       if (isLoading) return;
       try {
-        // Core Local Store
+        // Save to local cache
         await storage.set('dwg_projects', projects);
 
-        // Core Cloud Server Store
-        await fetch('/api/projects', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify(projects),
-        });
+        // Save to Firestore
+        await saveProjectsToFirestore(projects);
       } catch (e) {
         console.error('Storage sync error:', e);
-        setError('서버 또는 데이터베이스 동기화 저장 중 오류가 발생했습니다.');
+        setError('서버 또는 파이어베이스 동기화 저장 중 오류가 발생했습니다.');
       }
     };
     saveData();
@@ -661,7 +585,7 @@ export default function Admin() {
                 <h2 className="text-sm uppercase tracking-widest font-bold text-natural-dark">등록된 프로젝트 목록 ({projects.length})</h2>
                 <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-wider font-bold text-natural-accent">
                   <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
-                  IndexedDB 고용량 데이터베이스 활성화됨 (용량 무제한)
+                  Firebase Cloud 클라우드 동기화 활성화됨 (멀티 디바이스 연동)
                 </div>
               </div>
               <div className="space-y-4">
