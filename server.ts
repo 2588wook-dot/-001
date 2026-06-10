@@ -6,8 +6,12 @@ import fs from "fs/promises";
 import { existsSync } from "fs";
 import { INITIAL_PROJECTS } from "./src/data/initialProjects";
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+let currentDirname = process.cwd();
+try {
+  currentDirname = path.dirname(fileURLToPath(import.meta.url));
+} catch {
+  currentDirname = __dirname;
+}
 
 async function startServer() {
   const app = express();
@@ -66,7 +70,7 @@ async function startServer() {
     app.use(vite.middlewares);
   } else {
     // Serve static files in production
-    const distPath = path.resolve(__dirname, 'dist');
+    const distPath = path.resolve(currentDirname, 'dist');
     console.log(`Serving static files from: ${distPath}`);
     
     app.use(express.static(distPath));
