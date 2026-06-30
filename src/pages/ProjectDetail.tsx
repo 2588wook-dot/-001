@@ -98,26 +98,19 @@ export default function ProjectDetail() {
             </div>
 
             <div className="space-y-16 pb-40">
-              <div className="aspect-video bg-natural-bg overflow-hidden border border-natural-border">
-                <img src={project.thumbnail} alt={project.title} className="w-full h-full object-cover shadow-xl" />
-              </div>
-              
-              {project.images && project.images.length > 0 && (
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-16">
-                  {project.images.map((img, idx) => (
-                    <motion.div 
-                      key={idx}
-                      initial={{ opacity: 0, y: 20 }}
-                      whileInView={{ opacity: 1, y: 0 }}
-                      viewport={{ once: true }}
-                      transition={{ delay: idx * 0.1 }}
-                      className={`${idx % 3 === 0 ? 'md:col-span-2 aspect-video' : 'aspect-[4/5]'} bg-natural-bg overflow-hidden border border-natural-border shadow-lg`}
-                    >
-                      <img src={img} alt={`Gallery ${idx}`} className="w-full h-full object-cover hover:scale-105 transition-transform duration-1000" />
-                    </motion.div>
-                  ))}
+              <a 
+                href="https://portfolio.adobe.com/09a92c86-b854-44a5-a82a-d3dd6b148b69/editor/"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="block aspect-video bg-natural-bg overflow-hidden border border-natural-border relative group cursor-pointer shadow-xl hover:border-natural-accent transition-colors duration-300"
+              >
+                <img src={project.thumbnail} alt={project.title} className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-[1.02]" />
+                <div className="absolute inset-0 bg-natural-dark/10 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
+                  <div className="bg-white/90 backdrop-blur-sm text-natural-dark text-[10px] uppercase tracking-widest font-bold py-3 px-6 shadow-md border border-natural-border transition-transform duration-300 translate-y-2 group-hover:translate-y-0">
+                    View Portfolio Gallery
+                  </div>
                 </div>
-              )}
+              </a>
             </div>
           </motion.div>
         </div>

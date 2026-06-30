@@ -15,41 +15,15 @@ export async function getProjectsFromFirestore(): Promise<Project[]> {
     const q = query(collection(db, COLLECTION_NAME), orderBy('position', 'asc'));
     const querySnapshot = await getDocs(q);
     
-    if (querySnapshot.empty) {
-      console.log('Firestore projects collection is empty. Seeding INITIAL_PROJECTS...');
-      const seeded = await seedInitialProjects();
-      return seeded;
-    }
-    
     const list: Project[] = [];
+    const idsToDelete: string[] = [];
+    
     querySnapshot.forEach((docSnap) => {
       const data = docSnap.data();
-      list.push({
-        id: data.id,
-        title: data.title,
-        category: data.category,
-        location: data.location || '',
-        area: data.area || '',
-        period: data.period || '',
-        description: data.description || '',
-        thumbnail: data.thumbnail || '',
-        images: data.images || [],
-        createdAt: data.createdAt,
-        featured: data.featured ?? true,
-      } as Project);
-    });
-    return list;
-  } catch (err) {
-    console.warn('Error fetching ordered projects, trying unordered fetch:', err);
-    try {
-      const querySnapshot = await getDocs(collection(db, COLLECTION_NAME));
-      if (querySnapshot.empty) {
-        const seeded = await seedInitialProjects();
-        return seeded;
-      }
-      const list: Project[] = [];
-      querySnapshot.forEach((docSnap) => {
-        const data = docSnap.data();
+      const idNum = parseInt(data.id, 10);
+      if (idNum >= 1 && idNum <= 20) {
+        idsToDelete.push(data.id);
+      } else {
         list.push({
           id: data.id,
           title: data.title,
@@ -63,7 +37,64 @@ export async function getProjectsFromFirestore(): Promise<Project[]> {
           createdAt: data.createdAt,
           featured: data.featured ?? true,
         } as Project);
+      }
+    });
+
+    if (idsToDelete.length > 0) {
+      console.log('Cleaning up old demo projects from Firestore (ordered fetch):', idsToDelete);
+      try {
+        const batch = writeBatch(db);
+        idsToDelete.forEach(id => {
+          batch.delete(doc(db, COLLECTION_NAME, id));
+        });
+        await batch.commit();
+      } catch (batchErr) {
+        console.error('Failed to clear some demo projects in Firestore:', batchErr);
+      }
+    }
+    
+    return list;
+  } catch (err) {
+    console.warn('Error fetching ordered projects, trying unordered fetch:', err);
+    try {
+      const querySnapshot = await getDocs(collection(db, COLLECTION_NAME));
+      const list: Project[] = [];
+      const idsToDelete: string[] = [];
+      
+      querySnapshot.forEach((docSnap) => {
+        const data = docSnap.data();
+        const idNum = parseInt(data.id, 10);
+        if (idNum >= 1 && idNum <= 20) {
+          idsToDelete.push(data.id);
+        } else {
+          list.push({
+            id: data.id,
+            title: data.title,
+            category: data.category,
+            location: data.location || '',
+            area: data.area || '',
+            period: data.period || '',
+            description: data.description || '',
+            thumbnail: data.thumbnail || '',
+            images: data.images || [],
+            createdAt: data.createdAt,
+            featured: data.featured ?? true,
+          } as Project);
+        }
       });
+
+      if (idsToDelete.length > 0) {
+        console.log('Cleaning up old demo projects from Firestore (unordered fetch):', idsToDelete);
+        try {
+          const batch = writeBatch(db);
+          idsToDelete.forEach(id => {
+            batch.delete(doc(db, COLLECTION_NAME, id));
+          });
+          await batch.commit();
+        } catch (batchErr) {
+          console.error('Failed to clear some demo projects in Firestore:', batchErr);
+        }
+      }
       return list;
     } catch (fallbackErr) {
       handleFirestoreError(fallbackErr, OperationType.LIST, COLLECTION_NAME);
@@ -86,20 +117,26 @@ export async function saveProjectsToFirestore(projects: Project[]): Promise<void
     // 1. Add/Update every project with position
     projects.forEach((proj, index) => {
       const docRef = doc(db, COLLECTION_NAME, proj.id);
-      batch.set(docRef, {
-        id: proj.id,
-        title: proj.title,
-        category: proj.category,
-        location: proj.location,
-        area: proj.area,
-        period: proj.period,
-        description: proj.description,
-        thumbnail: proj.thumbnail,
-        images: proj.images,
-        createdAt: proj.createdAt instanceof Date ? proj.createdAt.toISOString() : proj.createdAt,
-        featured: proj.featured,
+      
+      // Ensure strict type-safety and sanitize fields to avoid undefined values or extra parameters
+      const sanitizedProject = {
+        id: proj.id || '',
+        title: proj.title || '',
+        category: (proj.category === 'interior' || proj.category === 'construction' || proj.category === 'remodeling') ? proj.category : 'interior',
+        location: proj.location || '',
+        area: proj.area || '',
+        period: proj.period || '',
+        description: proj.description || '',
+        thumbnail: proj.thumbnail || '',
+        images: Array.isArray(proj.images) ? proj.images.slice(0, 40) : [],
+        createdAt: proj.createdAt instanceof Date 
+          ? proj.createdAt.toISOString() 
+          : (typeof proj.createdAt === 'string' ? proj.createdAt : new Date().toISOString()),
+        featured: typeof proj.featured === 'boolean' ? proj.featured : true,
         position: index,
-      });
+      };
+
+      batch.set(docRef, sanitizedProject);
       existingIds.delete(proj.id);
     });
 
@@ -121,20 +158,25 @@ export async function seedInitialProjects(): Promise<Project[]> {
     const batch = writeBatch(db);
     INITIAL_PROJECTS.forEach((proj, index) => {
       const docRef = doc(db, COLLECTION_NAME, proj.id);
-      batch.set(docRef, {
-        id: proj.id,
-        title: proj.title,
-        category: proj.category,
-        location: proj.location,
-        area: proj.area,
-        period: proj.period,
-        description: proj.description,
-        thumbnail: proj.thumbnail,
-        images: proj.images,
-        createdAt: proj.createdAt,
-        featured: proj.featured,
+      
+      const sanitizedProject = {
+        id: proj.id || '',
+        title: proj.title || '',
+        category: (proj.category === 'interior' || proj.category === 'construction' || proj.category === 'remodeling') ? proj.category : 'interior',
+        location: proj.location || '',
+        area: proj.area || '',
+        period: proj.period || '',
+        description: proj.description || '',
+        thumbnail: proj.thumbnail || '',
+        images: Array.isArray(proj.images) ? proj.images.slice(0, 40) : [],
+        createdAt: proj.createdAt instanceof Date 
+          ? proj.createdAt.toISOString() 
+          : (typeof proj.createdAt === 'string' ? proj.createdAt : new Date().toISOString()),
+        featured: typeof proj.featured === 'boolean' ? proj.featured : true,
         position: index,
-      });
+      };
+
+      batch.set(docRef, sanitizedProject);
     });
     await batch.commit();
     console.log('Seeded initial projects into Firestore successfully.');

@@ -41,9 +41,12 @@
         },
         "featured": {
           "type": "boolean"
+        },
+        "position": {
+          "type": "integer"
         }
       },
-      "required": ["id", "title", "category", "location", "area", "period", "description", "thumbnail", "images", "createdAt", "featured"]
+      "required": ["id", "title", "category", "location", "area", "period", "description", "thumbnail", "images", "createdAt", "featured", "position"]
     }
   },
   "firestore": {

@@ -32,12 +32,10 @@ export default function Admin() {
     description: '',
   });
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
-  const [galleryPreviewUrls, setGalleryPreviewUrls] = useState<string[]>([]);
   const [isUploading, setIsUploading] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const galleryInputRef = useRef<HTMLInputElement>(null);
   const fileReaderRef = useRef<HTMLInputElement>(null);
 
   // Load projects from Firestore (with local cache fallback) on mount
@@ -86,6 +84,7 @@ export default function Admin() {
 
         // Save to Firestore
         await saveProjectsToFirestore(projects);
+        setError('');
       } catch (e) {
         console.error('Storage sync error:', e);
         setError('서버 또는 파이어베이스 동기화 저장 중 오류가 발생했습니다.');
@@ -95,7 +94,7 @@ export default function Admin() {
   }, [projects, isLoading]);
 
   // Image compression helper
-  const compressImage = (file: File): Promise<string> => {
+  const compressImage = (file: File, maxDim: number = 800, quality: number = 0.5): Promise<string> => {
     return new Promise((resolve, reject) => {
       const reader = new FileReader();
       reader.readAsDataURL(file);
@@ -106,7 +105,6 @@ export default function Admin() {
           const canvas = document.createElement('canvas');
           let width = img.width;
           let height = img.height;
-          const maxDim = 1200;
 
           if (width > height) {
             if (width > maxDim) {
@@ -124,7 +122,7 @@ export default function Admin() {
           canvas.height = height;
           const ctx = canvas.getContext('2d');
           ctx?.drawImage(img, 0, 0, width, height);
-          resolve(canvas.toDataURL('image/jpeg', 0.7));
+          resolve(canvas.toDataURL('image/jpeg', quality));
         };
         img.onerror = reject;
       };
@@ -148,7 +146,7 @@ export default function Admin() {
       setIsUploading(true);
       setError('');
       try {
-        const compressed = await compressImage(file);
+        const compressed = await compressImage(file, 800, 0.5);
         setPreviewUrl(compressed);
       } catch (err) {
         setError('이미지 처리 중 오류가 발생했습니다.');
@@ -158,28 +156,7 @@ export default function Admin() {
     }
   };
 
-  const handleGalleryFilesChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const files: File[] = Array.from(e.target.files || []) as File[];
-    if (files.length === 0) return;
-    
-    setIsUploading(true);
-    setError('');
-    try {
-      const compressedImages = await Promise.all(
-        files.map(file => compressImage(file))
-      );
-      setGalleryPreviewUrls(prev => [...prev, ...compressedImages]);
-    } catch (err) {
-      setError('이미지 처리 중 오류가 발생했습니다.');
-    } finally {
-      setIsUploading(false);
-      if (galleryInputRef.current) galleryInputRef.current.value = '';
-    }
-  };
-
-  const removeGalleryImage = (index: number) => {
-    setGalleryPreviewUrls(prev => prev.filter((_, i) => i !== index));
-  };
+  // No gallery image handlers needed
 
   const clearPreview = () => {
     setPreviewUrl(null);
@@ -197,10 +174,8 @@ export default function Admin() {
     });
     setEditingId(null);
     setPreviewUrl(null);
-    setGalleryPreviewUrls([]);
     setError('');
     if (fileInputRef.current) fileInputRef.current.value = '';
-    if (galleryInputRef.current) galleryInputRef.current.value = '';
   };
 
   const handleRegister = (e: React.FormEvent) => {
@@ -217,7 +192,7 @@ export default function Admin() {
     if (editingId) {
       setProjects(prev => prev.map(p => 
         p.id === editingId 
-          ? { ...p, ...form, thumbnail: previewUrl || p.thumbnail, images: galleryPreviewUrls } as Project
+          ? { ...p, ...form, thumbnail: previewUrl || p.thumbnail, images: [] } as Project
           : p
       ));
     } else {
@@ -230,7 +205,7 @@ export default function Admin() {
         period: form.period || '',
         description: form.description || '',
         thumbnail: previewUrl || '',
-        images: galleryPreviewUrls,
+        images: [],
         createdAt: new Date(),
         featured: true
       };
@@ -266,7 +241,6 @@ export default function Admin() {
     });
     setEditingId(project.id);
     setPreviewUrl(project.thumbnail);
-    setGalleryPreviewUrls(project.images || []);
     setError('');
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
@@ -524,40 +498,7 @@ export default function Admin() {
                     )}
                   </div>
 
-                  <div className="space-y-4 pt-4 border-t border-natural-border/30">
-                    <label className="block text-[9px] uppercase tracking-widest font-bold text-natural-muted">상세 갤러리 (다중 선택 가능)</label>
-                    
-                    <div className="grid grid-cols-3 gap-2">
-                      {galleryPreviewUrls.map((url, index) => (
-                        <div key={index} className="relative aspect-square border border-natural-border overflow-hidden group">
-                          <img src={url} className="w-full h-full object-cover" />
-                          <div className="absolute inset-0 bg-natural-dark/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
-                            <button 
-                              type="button"
-                              onClick={() => removeGalleryImage(index)}
-                              className="bg-white p-1 rounded-full text-natural-dark hover:bg-natural-accent hover:text-white transition-colors"
-                            >
-                              <X className="w-3 h-3" />
-                            </button>
-                          </div>
-                        </div>
-                      ))}
-                      <div 
-                        onClick={() => !isUploading && galleryInputRef.current?.click()}
-                        className={`aspect-square bg-white border border-dashed border-natural-border flex flex-col items-center justify-center transition-colors group ${isUploading ? 'opacity-50 cursor-wait' : 'cursor-pointer hover:border-natural-accent'}`}
-                      >
-                        <Plus className="w-4 h-4 text-natural-muted group-hover:text-natural-accent" />
-                        <input 
-                          type="file" 
-                          ref={galleryInputRef}
-                          onChange={handleGalleryFilesChange}
-                          className="hidden" 
-                          accept="image/*"
-                          multiple
-                        />
-                      </div>
-                    </div>
-                  </div>
+                  {/* Detailed gallery option removed to show only single representative image */}
                   <div className="flex gap-2">
                     <button 
                       type="submit" 
